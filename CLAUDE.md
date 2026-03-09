@@ -21,7 +21,7 @@ A Claude Code Skill (plugin) for Android reverse engineering, API extraction, an
 - `plugins/android-reverse-engineering/skills/android-reverse-engineering/` — Core RE skill (5-phase workflow, references, scripts)
 - `plugins/android-reverse-engineering/skills/tracker-analysis/` — Tracker/analytics SDK detection skill (4-phase workflow, references, find-trackers.sh)
 - `plugins/android-reverse-engineering/skills/ad-analysis/` — Advertising SDK detection skill (3-phase workflow, references, find-ads.sh)
-- `plugins/android-reverse-engineering/skills/sdk-neutralizer/` — SDK neutralization skill (6-phase workflow, references, decode-apk.sh, neutralize.sh, rebuild-apk.sh)
+- `plugins/android-reverse-engineering/skills/sdk-neutralizer/` — SDK neutralization skill (6-phase workflow, references, decode-apk.sh, neutralize.sh, merge-splits.sh, rebuild-apk.sh)
 
 ## Key Scripts
 
@@ -70,8 +70,11 @@ bash decode-apk.sh <file.apk|file.xapk> [-o <decoded-dir>]
 # Neutralize SDK entry points in decoded APK (dry-run first)
 bash neutralize.sh <decoded-dir> [--ads|--trackers|--all] [--dry-run] [--no-backup] [--no-manifest] [--targets-file <file>] [--replay] [--no-save-manifest]
 
-# Rebuild and sign neutralized APK (auto-reassembles XAPK if .xapk-origin/ exists)
-bash rebuild-apk.sh <decoded-dir> [--auto-keystore|--debug-key|--keystore <file>] [-o <output>] [--no-sign] [--no-res] [--zipalign]
+# Merge XAPK splits into decoded base for single APK output (optional, for XAPK input)
+bash merge-splits.sh <decoded-dir> [--abi <abi>] [--all-abis] [--skip-resources]
+
+# Rebuild and sign neutralized APK (auto-reassembles XAPK if .xapk-origin/ exists, or single APK if merged)
+bash rebuild-apk.sh <decoded-dir> [--auto-keystore|--debug-key|--keystore <file>] [-o <output>] [--no-sign] [--no-res] [--zipalign] [--single-apk]
 ```
 
 ## Architecture
@@ -96,6 +99,14 @@ bash rebuild-apk.sh <decoded-dir> [--auto-keystore|--debug-key|--keystore <file>
 ## No Build/Test/Lint
 
 This is a documentation-and-scripts plugin with no compiled code, no test suite, and no linter configuration. Changes are validated by reading the markdown/bash and testing scripts manually against APK files.
+
+## Versioning
+
+The plugin version is declared in **two** files that **must be kept in sync**:
+- `.claude-plugin/marketplace.json` → `plugins[0].version` (marketplace catalog)
+- `plugins/android-reverse-engineering/.claude-plugin/plugin.json` → `version` (plugin manifest)
+
+Claude Code reads the version from `plugin.json` with priority — if that file has a stale version, `/plugin` will show the old number even if `marketplace.json` is updated. **Always bump both files together.**
 
 ## Conventions
 

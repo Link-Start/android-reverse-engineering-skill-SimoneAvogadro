@@ -20,13 +20,17 @@ Usage: rebuild-apk.sh <decoded-dir> [OPTIONS]
 
 Rebuild an apktool-decoded APK directory back into a signed APK.
 If the decoded dir contains .xapk-origin/ (from decode-apk.sh), automatically
-reassembles a complete XAPK with all split APKs re-signed.
+reassembles a complete XAPK with all split APKs re-signed — unless --single-apk
+is used or .xapk-origin/.merged exists (from merge-splits.sh), in which case
+a single merged APK is produced instead.
 
 Arguments:
   <decoded-dir>   Path to the apktool-decoded APK directory
 
 Options:
   -o, --output <file>     Output path (default: <decoded-dir>-neutralized.apk/.xapk)
+  --single-apk            Force output as single .apk even if .xapk-origin/ exists
+                          (auto-enabled when .xapk-origin/.merged marker is present)
   --auto-keystore         Auto-detect best keystore: ~/.android/debug.keystore,
                           then previous .neutralizer-debug.keystore, then generate new
   --debug-key             Sign with an auto-generated debug keystore (default)
@@ -70,6 +74,7 @@ DO_ZIPALIGN=true
 NO_ZIPALIGN=false
 FORCE_NO_RES=false
 BUILD_USED_NO_RES=false
+SINGLE_APK=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -95,6 +100,7 @@ while [[ $# -gt 0 ]]; do
       shift
       if [[ $# -eq 0 ]]; then echo "Error: --store-pass requires an argument" >&2; exit 1; fi
       STORE_PASS="$1"; shift ;;
+    --single-apk)    SINGLE_APK=true; shift ;;
     --no-sign)       DO_SIGN=false; shift ;;
     --no-res)        FORCE_NO_RES=true; shift ;;
     --zipalign)      DO_ZIPALIGN=true; shift ;;
@@ -122,10 +128,16 @@ if [[ -f "$XAPK_ORIGIN_DIR/metadata.json" ]]; then
   IS_XAPK=true
 fi
 
-# Default output name — .xapk if original was XAPK, .apk otherwise
+# Auto-detect merged marker from merge-splits.sh
+if [[ -f "$XAPK_ORIGIN_DIR/.merged" ]]; then
+  SINGLE_APK=true
+  echo "[INFO] Detected .xapk-origin/.merged marker — will produce a single merged APK"
+fi
+
+# Default output name — .xapk if original was XAPK (and not merging), .apk otherwise
 if [[ -z "$OUTPUT" ]]; then
   local_dir="${DECODED_DIR%/}"
-  if [[ "$IS_XAPK" == true ]]; then
+  if [[ "$IS_XAPK" == true ]] && [[ "$SINGLE_APK" == false ]]; then
     OUTPUT="${local_dir}-neutralized.xapk"
   else
     OUTPUT="${local_dir}-neutralized.apk"
@@ -435,7 +447,7 @@ fi
 # Step 5: XAPK assembly (if original was XAPK)
 # =====================================================================
 
-if [[ "$IS_XAPK" == true ]] && [[ "$DO_SIGN" == true ]]; then
+if [[ "$IS_XAPK" == true ]] && [[ "$DO_SIGN" == true ]] && [[ "$SINGLE_APK" == false ]]; then
   echo
   echo "=== Assembling XAPK ==="
 
@@ -514,8 +526,10 @@ fi
 echo
 echo "=== Rebuild Complete ==="
 
-if [[ "$IS_XAPK" == true ]]; then
+if [[ "$IS_XAPK" == true ]] && [[ "$SINGLE_APK" == false ]]; then
   echo "Output XAPK: $OUTPUT"
+elif [[ "$IS_XAPK" == true ]] && [[ "$SINGLE_APK" == true ]]; then
+  echo "Output APK (merged from XAPK): $OUTPUT"
 else
   echo "Output APK: $OUTPUT"
 fi
@@ -543,10 +557,16 @@ fi
 
 echo
 echo "WARNING: Play Integrity / SafetyNet will FAIL — expected for enterprise sideloading."
-if [[ "$IS_XAPK" == true ]]; then
+if [[ "$IS_XAPK" == true ]] && [[ "$SINGLE_APK" == false ]]; then
   echo "Install via: adb install-multiple <base.apk> <split1.apk> <split2.apk> ..."
   echo "         or: use a split APK installer (e.g., SAI — Split APKs Installer)"
   echo "         or: unzip the XAPK and run: adb install-multiple *.apk"
+elif [[ "$IS_XAPK" == true ]] && [[ "$SINGLE_APK" == true ]]; then
+  echo "Install via: adb install $OUTPUT"
+  echo
+  echo "NOTE: This is a merged single APK from an XAPK split bundle."
+  echo "      Some locale/density-specific resources may use defaults."
+  echo "      Test thoroughly on target devices."
 else
   echo "Install via: adb install $OUTPUT"
 fi

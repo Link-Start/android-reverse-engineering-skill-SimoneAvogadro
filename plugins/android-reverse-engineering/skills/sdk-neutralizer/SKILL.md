@@ -94,7 +94,7 @@ For XAPK input, the script also outputs `XAPK_ORIGIN:<path>` and creates:
 - `.xapk-origin/manifest.json` — original XAPK manifest
 - `.xapk-origin/splits/` — all split APKs (config.arm64_v8a.apk, config.en.apk, etc.)
 
-If the input is an XAPK, inform the user that it's a split APK bundle and that all splits will be automatically re-signed during rebuild.
+If the input is an XAPK, inform the user that it's a split APK bundle. Let them know that in Phase 5 (Rebuild) they will be asked whether to produce a **merged single APK** (easier to install) or keep the **XAPK bundle** (preserves all splits).
 
 ### Phase 3: Identify Targets
 
@@ -224,6 +224,42 @@ After a successful (non-dry-run) neutralization, a `neutralize-manifest.json` is
 
 Rebuild the decoded directory back into a signed APK (or XAPK if the original was an XAPK).
 
+#### Phase 5a — XAPK Output Format Choice (XAPK input only)
+
+**If the input was an XAPK**, you **MUST ask the user** how to rebuild:
+
+> How would you like to rebuild the neutralized app?
+>
+> 1. **Merged single APK** (recommended for sideloading) — merges split contents into one APK, installable with standard `adb install`. May be missing some locale/density resources.
+> 2. **XAPK bundle** (preserves original structure) — requires `adb install-multiple` or SAI app to install. All splits preserved exactly.
+
+**If the user chooses option 1 (merged single APK):**
+
+Run `merge-splits.sh` to merge split contents into the decoded base APK directory:
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/skills/sdk-neutralizer/scripts/merge-splits.sh <decoded-dir>
+```
+
+Options:
+- `--abi <abi>` — merge only a specific ABI (e.g., `arm64-v8a`)
+- `--all-abis` — merge all ABIs (larger but universal APK)
+- `--skip-resources` — skip resource split merge (locale/density)
+- Default (no flags): picks the most common ABI (`arm64-v8a` > `armeabi-v7a` > `x86_64` > `x86`)
+
+Parse output for `MERGE_ABI:`, `MERGE_RESOURCES:`, `SKIPPED_RESOURCES:`, `FEATURE_SPLIT_WARNING:`, `MANIFEST_CLEANED:`, and `MERGE_COMPLETE:` lines.
+
+**Important merge limitations to communicate to the user:**
+- Resource splits (locale, density) are merged best-effort — compiled `resources.arsc` cannot be fused without `aapt2`. The merged APK uses default resources from the base APK.
+- Feature module splits (containing DEX code) **cannot** be merged — the script warns about these.
+- Native library merge changes `android:extractNativeLibs` to `true`, which increases installed size.
+
+After merge, the rebuild script auto-detects the `.merged` marker and produces a single `.apk`.
+
+**If the user chooses option 2 (XAPK bundle):** skip `merge-splits.sh` and proceed directly to rebuild — the script will auto-reassemble the XAPK.
+
+#### Phase 5b — Signing Preference
+
 **Before calling rebuild**, you **MUST ask the user** their signing preference:
 
 > How would you like to sign the rebuilt APK?
@@ -237,22 +273,31 @@ Map the user's choice to the corresponding flag:
 - Option 2 → `--keystore <file> --key-alias <alias> --store-pass <pass> --key-pass <pass>`
 - Option 3 → `--no-sign`
 
+#### Phase 5c — Run Rebuild
+
 **Action**: Run the rebuild script with the chosen signing option.
 
 ```bash
-# Example with auto-keystore (recommended default)
+# Single merged APK (after merge-splits.sh, auto-detected via .merged marker)
+bash ${CLAUDE_PLUGIN_ROOT}/skills/sdk-neutralizer/scripts/rebuild-apk.sh <decoded-dir> --auto-keystore
+
+# Or explicitly force single APK output
+bash ${CLAUDE_PLUGIN_ROOT}/skills/sdk-neutralizer/scripts/rebuild-apk.sh <decoded-dir> --auto-keystore --single-apk
+
+# XAPK bundle (default when .xapk-origin/ exists and no .merged marker)
 bash ${CLAUDE_PLUGIN_ROOT}/skills/sdk-neutralizer/scripts/rebuild-apk.sh <decoded-dir> --auto-keystore
 ```
 
 Options:
 - `-o <output>` — custom output path
+- `--single-apk` — force single APK output (auto-enabled when `.merged` marker exists)
 - `--auto-keystore` — auto-detect best keystore (recommended)
 - `--debug-key` — always generate new debug keystore
 - `--keystore <file>` — use a custom keystore
 - `--no-sign` — output unsigned APK
 - `--zipalign` / `--no-zipalign` — control zipalign step
 
-For XAPK input, the rebuild is automatic: the script detects `.xapk-origin/`, re-signs all split APKs with the same keystore, and produces a `.xapk` output. Parse the output for `KEYSTORE_USED:`, `KEYSTORE_SOURCE:`, `SPLIT_SIGNED:`, and `XAPK_ASSEMBLED:` lines.
+For XAPK input without merge, the rebuild is automatic: the script detects `.xapk-origin/`, re-signs all split APKs with the same keystore, and produces a `.xapk` output. Parse the output for `KEYSTORE_USED:`, `KEYSTORE_SOURCE:`, `SPLIT_SIGNED:`, and `XAPK_ASSEMBLED:` lines.
 
 ### Phase 6: Verify & Report
 
@@ -308,13 +353,29 @@ Modifying APKs may violate the app's EULA, SDK provider agreements, or intellect
 property laws. This tool is intended for authorized enterprise use, security research,
 and privacy compliance only.
 
+## Split Merge Details (if applicable)
+
+If the original input was an XAPK and the user chose merged single APK output, include this section:
+
+| Merge Step | Result |
+|---|---|
+| ABI splits merged | arm64-v8a (3 native libraries) |
+| Resource splits | 2 merged (best-effort), 1 skipped |
+| Feature splits | 0 (or: 1 warning — could not merge) |
+| Manifest cleanup | isSplitRequired, extractNativeLibs→true, com.android.vending.splits.required |
+
+**Merge limitations:**
+- Locale/density resources use defaults from the base APK (compiled `resources.arsc` from splits cannot be fused)
+- `android:extractNativeLibs` was set to `true` — native libs are extracted on install (uses more disk space)
+- Feature module splits (if any) were NOT merged and their functionality may be missing
+
 ## Output
 
 - Sanitized APK/XAPK: `<path>`
-- Output format: APK (single) / XAPK (split bundle)
+- Output format: APK (single) / APK (merged from XAPK) / XAPK (split bundle)
 - Signed with: auto-detected debug key / generated debug key / custom keystore
 - Keystore used: `<path>` (source: `KEYSTORE_SOURCE:` value)
-- Install via: `adb install <path>` (APK) or `adb install-multiple <base.apk> <split1.apk> ...` (XAPK)
+- Install via: `adb install <path>` (APK / merged APK) or `adb install-multiple <base.apk> <split1.apk> ...` (XAPK)
 - For XAPK: can also use SAI (Split APKs Installer) or unzip and `adb install-multiple *.apk`
 ```
 
