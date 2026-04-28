@@ -18,6 +18,8 @@ Options:
   --apollo        Search only for Apollo (GraphQL) patterns
   --volley        Search only for Volley patterns
   --urls          Search only for hardcoded URLs
+  --paths         Extract unique endpoint-shaped path string literals
+                  (works on heavily obfuscated apps where call sites are inlined)
   --auth          Search only for auth-related patterns
   --all           Search all patterns (default)
   -h, --help      Show this help message
@@ -35,6 +37,7 @@ SEARCH_KTOR=false
 SEARCH_APOLLO=false
 SEARCH_VOLLEY=false
 SEARCH_URLS=false
+SEARCH_PATHS=false
 SEARCH_AUTH=false
 SEARCH_ALL=true
 
@@ -46,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --apollo)   SEARCH_APOLLO=true;   SEARCH_ALL=false; shift ;;
     --volley)   SEARCH_VOLLEY=true;    SEARCH_ALL=false; shift ;;
     --urls)     SEARCH_URLS=true;      SEARCH_ALL=false; shift ;;
+    --paths)    SEARCH_PATHS=true;     SEARCH_ALL=false; shift ;;
     --auth)     SEARCH_AUTH=true;      SEARCH_ALL=false; shift ;;
     --all)      SEARCH_ALL=true; shift ;;
     -h|--help)  usage ;;
@@ -121,6 +125,36 @@ fi
 if [[ "$SEARCH_ALL" == true || "$SEARCH_VOLLEY" == true ]]; then
   section "Volley Requests"
   run_grep '(StringRequest|JsonObjectRequest|JsonArrayRequest|ImageRequest|RequestQueue|Volley\.newRequestQueue)'
+fi
+
+# --- Endpoint-shaped path literals ---
+# Survives R8 obfuscation: even when call sites are inlined to a.b(c, "path"),
+# the path strings themselves are not obfuscated. This produces a deduplicated
+# inventory of likely API endpoints that other modes miss.
+if [[ "$SEARCH_ALL" == true || "$SEARCH_PATHS" == true ]]; then
+  section "Endpoint-Shaped Path Literals (deduplicated)"
+  # Quoted strings that begin with /<segment> or <segment>/ where the leading
+  # segment is a typical API root word. Cap segment count and length to keep
+  # the regex grounded.
+  # An endpoint-shaped string is one of:
+  #   "/seg/seg..."                   — absolute path with >= 2 segments
+  #   "api-root/seg/seg..."           — relative path starting with a known
+  #                                     API root keyword and containing >= 1
+  #                                     '/' followed by another segment
+  # Segments are URL-safe chars plus {} for path-template placeholders.
+  SEG='[A-Za-z0-9_{}.\-]+'
+  ROOT='(api|v[0-9]+|graphql|rest|mobile|auth|oauth|sso|users?|account|session|token|register|signup|signin|logout|password|verify|otp|sms|profile|customer|cart|basket|order|checkout|payment|invoice|product|catalog|inventory|search|category|favo[u]?rites?|wishlist|address|location|delivery|shipping|review|feedback|notification|push|message|chat|track|event|stat[a-z]*|metric|config|settings?|feature|flag|banner|content|media|upload|download|file|image|video|live|stream|webhook|callback)'
+  PATHS_REGEX="\"(/${SEG}(/${SEG})+/?|${ROOT}(/${SEG})+/?)\""
+  # Filter out frequent false positives (MIME types, /proc, /sys, /dev).
+  EXCLUDE='^"(image|video|audio|text|application|content|font|model|multipart|message)/|^"/(proc|sys|dev|tmp|etc|usr|var|opt)/'
+  # Print a flat unique list rather than file:line — this is the inventory.
+  grep -rhoE --include='*.java' --include='*.kt' "$PATHS_REGEX" "$SOURCE_DIR" 2>/dev/null \
+      | grep -Ev "$EXCLUDE" \
+      | sort -u
+  echo
+  section "Endpoint-Shaped Path Literals — call sites"
+  grep $GREP_OPTS -E "$PATHS_REGEX" "$SOURCE_DIR" 2>/dev/null \
+      | grep -Ev ":[0-9]+:.*${EXCLUDE#^}" || true
 fi
 
 # --- Hardcoded URLs ---

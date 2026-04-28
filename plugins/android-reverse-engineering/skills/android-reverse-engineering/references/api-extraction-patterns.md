@@ -136,6 +136,25 @@ grep -rn 'loadUrl\|evaluateJavascript\|addJavascriptInterface\|WebViewClient\|sh
 
 WebView-based apps may load API endpoints via JavaScript bridges. Look for `@JavascriptInterface` annotated methods.
 
+## Endpoint-Shaped Path Literals (obfuscation-resistant)
+
+When the HTTP client cannot be identified (custom abstraction, heavy
+inlining, KMP shared module), or the call sites are obfuscated to
+`a.b(c, "path")`, fall back to extracting the path string literals
+themselves. R8 does not obfuscate string contents, so paths leak through.
+
+```bash
+# All quoted strings shaped like an API path, deduplicated
+grep -rhoE '"(/[A-Za-z0-9_{}.\-]+(/[A-Za-z0-9_{}.\-]+)+/?|(api|v[0-9]+|graphql|users?|account|auth|sso|oauth|profile|cart|basket|order|product|inventory|search|category|address|location|delivery|payment|invoice|favo[u]?rites?)(/[A-Za-z0-9_{}.\-]+)+/?)"' sources/ \
+    | grep -Ev '^"(image|video|audio|text|application|content)/|^"/(proc|sys|dev|tmp|etc)/' \
+    | sort -u
+```
+
+The skill ships this as `find-api-calls.sh --paths`, which prints both a
+deduplicated inventory and the full list of call sites. On real-world
+Kotlin apps this single command typically produces 100–300 distinct
+endpoint paths, which is the most useful first artifact for documentation.
+
 ## Hardcoded URLs and Secrets
 
 ```bash
