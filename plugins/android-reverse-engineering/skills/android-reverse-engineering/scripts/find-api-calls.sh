@@ -226,9 +226,27 @@ fi
 # --- Auth patterns ---
 if [[ "$SEARCH_ALL" == true || "$SEARCH_AUTH" == true ]]; then
   section "Authentication & API Keys"
-  run_grep -i '(api[_-]?key|auth[_-]?token|bearer|authorization|x-api-key|client[_-]?secret|access[_-]?token)'
+  run_grep -i '(api[_-]?key|auth[_-]?token|bearer|authorization|x-api-key|client[_-]?secret|access[_-]?token|refresh[_-]?token)'
+
+  # Request-signing schemes: a hardcoded HMAC / RSA secret in an APK is a
+  # security finding worth surfacing prominently. These patterns catch the
+  # common shapes of homegrown / SDK-issued request signers.
+  section "Request Signing (HMAC / signature schemes)"
+  run_grep '(HmacSHA(1|256|512)|Mac\.getInstance\("Hmac|SecretKeySpec\(|Signature\.getInstance\()'
+  run_grep -i '(x-signature|x-client-authorization|x-amz-signature|x-hmac|aws4-hmac|signRequest|signatureFor|computeSignature|signaturev[0-9])'
+
+  # Hardcoded high-entropy strings adjacent to "secret"/"key" assignments
+  # are the canonical leaked-credential pattern.
+  section "Possible Hardcoded Secrets / Keys"
+  run_grep -i '(app[_-]?secret|client[_-]?secret|signing[_-]?key|hmac[_-]?secret|consumer[_-]?secret|private[_-]?key)'
+
   section "Base URLs and Constants"
   run_grep -i '(BASE_URL|API_URL|SERVER_URL|ENDPOINT|API_BASE|HOST_NAME)'
+
+  # Ktor BearerTokens / refresh DSL — common on Kotlin apps and lives on
+  # Ktor's public API, so it survives R8 unchanged.
+  section "Ktor Auth (Bearer + Refresh)"
+  run_grep '(BearerTokens|loadTokens\s*\{|refreshTokens\s*\{|\bbearer\s*\{)'
 fi
 
 echo

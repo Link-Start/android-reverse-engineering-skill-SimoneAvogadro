@@ -84,9 +84,9 @@ Look for:
 - Firebase/analytics initialization
 - Base URL configuration
 
-## 5. Dependency Injection (Dagger / Hilt)
+## 5. Dependency Injection
 
-Modern Android apps use DI. Trace bindings to find implementations:
+### Dagger / Hilt
 
 ```bash
 # Hilt modules
@@ -102,10 +102,43 @@ grep -rn '@Component\|@Subcomponent' sources/
 grep -rn '@Inject' sources/
 ```
 
-To trace a call flow through DI:
-1. Find where an interface is used (e.g., `ApiService` injected into a repository)
-2. Find the `@Provides` or `@Binds` method that creates the implementation
-3. Follow the implementation to the actual HTTP call
+### Koin
+
+Koin is the dominant DI framework in Kotlin Multiplatform and a large
+share of Kotlin-only Android apps. It uses a runtime DSL rather than
+compile-time generated factories, so the search patterns are different:
+
+```bash
+# Confirm Koin is actually wired up
+grep -rn 'org\.koin\.' sources/
+
+# DI module declarations
+grep -rn 'fun [A-Za-z]\+Module\|module\s*{\|module(' sources/
+
+# Bindings inside a module DSL
+grep -rn 'single\s*[<{(]\|factory\s*[<{(]\|viewModel\s*[<{(]\|scoped\s*[<{(]\|singleOf\|factoryOf' sources/
+
+# Resolution call-sites (where a binding is consumed)
+grep -rn '\bget\s*<\|\binject\s*<\|by\s\+inject\b\|by\s\+viewModel\b\|getKoin' sources/
+```
+
+After R8, every binding lambda becomes an anonymous
+`Function2<Scope, ParametersHolder, T>` impl. To find the binding for an
+interface `Foo`, look for files that contain both a Koin import / module
+DSL marker and a reference to `Foo`:
+
+```bash
+grep -rln 'org\.koin\.core\.module' sources/ | xargs grep -l 'Foo'
+```
+
+### Trace through DI
+
+1. Find where an interface is used (e.g. `ApiService` injected into a
+   repository).
+2. Find the `@Provides` / `@Binds` method (Hilt) **or** the
+   `single { ... }` / `factory { ... }` block (Koin) that creates the
+   implementation.
+3. Follow the implementation to the actual HTTP call.
 
 ## 6. Find Constants and Configuration
 
